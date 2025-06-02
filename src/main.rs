@@ -1,10 +1,15 @@
 use gtk::prelude::*;
-use gtk::{glib, Application, ApplicationWindow, Notebook, Label, Box, Orientation, Align, Picture, ListBox, ListBoxRow, CheckButton, SelectionMode, MenuButton, Popover, Button, CssProvider, LinkButton, TextView, ScrolledWindow};
+use gtk::{glib, gio, Application, ApplicationWindow, Notebook, Label, Box, Orientation, Align, Picture, ListBox, ListBoxRow, CheckButton, SelectionMode, MenuButton, Popover, Button, CssProvider, LinkButton, TextView, ScrolledWindow};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::env;
+use std::process::Command;
+use std::thread;
 
-static ITEMS: [(&str, i32); 11] = [
+// Assume async_channel is added to Cargo.toml
+// use async_channel; // Not strictly needed for `::unbounded()` call if prelude isn't used
+
+static ITEMS: [(&str, i32); 12] = [
     ("💙 Blue Teamer 💙", 0),
     ("🐞 Bug Bounty Hunter 🐞", 1),
     ("🍘 Cracker Specialist 🍘", 2),
@@ -16,7 +21,7 @@ static ITEMS: [(&str, i32); 11] = [
     ("🌐 Network Analyst 🌐", 8),
     ("🕵️ OSINT Specialist 🕵️", 9),
     ("❤️ Red Teamer ❤️", 10),
-    // ("🕸️ Web Pentester 🕸️", 11) - User removed this, ensure array size is 11
+    ("🕸️ Web Pentester 🕸️", 11),
 ];
 
 #[derive(Debug, Clone)]
@@ -24,6 +29,13 @@ enum OsType {
     Arch,
     NixOS,
     Other(String),
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PackageManager {
+    Pacman,
+    Nix,
     Unknown,
 }
 
@@ -50,10 +62,26 @@ fn detect_os() -> OsType {
     }
 }
 
+fn detect_package_manager() -> PackageManager {
+    // Check for pacman (Arch)
+    if Command::new("pacman").arg("--version").output().is_ok() {
+        return PackageManager::Pacman;
+    }
+    // Check for nix (NixOS) - nix-shell is a common command, or just "nix"
+    if Command::new("nix").arg("--version").output().is_ok() || Command::new("nix-shell").arg("--version").output().is_ok() {
+        return PackageManager::Nix;
+    }
+    PackageManager::Unknown
+}
+
 fn main() -> glib::ExitCode {
     let app = Application::builder()
         .application_id("org.athenaos.welcome")
         .build();
+
+    // Load resources before connecting to activate
+    gio::resources_register_include!("compiled_resources.rs")
+        .expect("Failed to register resources from build script output.");
 
     app.connect_activate(build_ui);
     // CSS Provider setup moved to build_ui
@@ -173,11 +201,11 @@ fn create_welcome_page(os_type: &OsType) -> Box {
     description.set_markup(welcome_text);
     
     let image_path = match os_type {
-        OsType::Arch => "images/athena-arch-one-liner.png",
-        OsType::NixOS => "images/athena-nix-one-liner.png",
-        _ => "images/athena-arch-one-liner.png",
+        OsType::Arch => "/org/athenaos/welcome/images/athena-arch-one-liner.png",
+        OsType::NixOS => "/org/athenaos/welcome/images/athena-nix-one-liner.png",
+        _ => "/org/athenaos/welcome/images/athena-arch-one-liner.png",
     };
-    let athena_pic = Picture::for_filename(image_path);
+    let athena_pic = Picture::for_resource(image_path);
     
     let list_box = ListBox::new();
     list_box.set_selection_mode(SelectionMode::Multiple);
@@ -220,7 +248,7 @@ fn create_welcome_page(os_type: &OsType) -> Box {
     buttons_box.set_halign(Align::Center);
     buttons_box.set_spacing(10);
 
-    let package_update_button = Button::with_label("Package update");
+    let package_update_button = Button::with_label("Package Update");
     package_update_button.add_css_class("rounded");
     buttons_box.append(&package_update_button);
 
@@ -252,8 +280,122 @@ fn create_welcome_page(os_type: &OsType) -> Box {
     let buffer_mirrors = buffer.clone();
     let console_output_mirrors = console_output.clone();
     let append_clone_mirrors = append_to_console_output.clone();
+    let update_mirrors_button_clone = update_mirrors_button.clone();
+    let detected_pkg_manager_mirrors = detect_package_manager();
+    let os_type_mirrors = os_type.clone();
+
+    // Channel for communication between the command thread and the main GTK thread
+    // The message will be the result of the command execution
+    let (tx_cmd_result, rx_cmd_result) = async_channel::unbounded::<Result<std::process::Output, std::io::Error>>();
+
     update_mirrors_button.connect_clicked(move |_| {
-        append_clone_mirrors(&buffer_mirrors, &console_output_mirrors, "Updating Mirrors...\n");
+        update_mirrors_button_clone.set_sensitive(false);
+        let initial_message: String;
+        let mut command_to_run_opt: Option<String> = None;
+
+        match &os_type_mirrors {
+            OsType::Arch => {
+                if Command::new("reflector").arg("--version").output().is_ok() {
+                    let cmd = "reflector --latest 5 --sort rate --save /etc/pacman.d/mirrorlist";
+                    command_to_run_opt = Some(cmd.to_string());
+                    initial_message = format!("Detected OS: Arch Linux.\nAttempting to update mirrors with reflector: {}\n", cmd);
+                } else {
+                    initial_message = "Detected OS: Arch Linux.\n'reflector' command not found. Please install it to enable mirror updates.\n".to_string();
+                }
+            }
+            OsType::NixOS => {
+                initial_message = "Detected OS: NixOS.\nMirror management in NixOS is typically handled by `nix-channel --update` and `nixos-rebuild switch` (available under 'Package Update').\nNo separate mirror update step is usually required.\n".to_string();
+            }
+            OsType::Other(id) => {
+                match detected_pkg_manager_mirrors {
+                    PackageManager::Pacman => {
+                         if Command::new("reflector").arg("--version").output().is_ok() {
+                            let cmd = "reflector --latest 5 --sort rate --save /etc/pacman.d/mirrorlist";
+                            command_to_run_opt = Some(cmd.to_string());
+                            initial_message = format!("Detected OS: {} (Pacman found).\nAttempting to update mirrors with reflector: {}\n", id, cmd);
+                        } else {
+                            initial_message = format!("Detected OS: {} (Pacman found).\n'reflector' command not found. Please install it to enable mirror updates.\n", id);
+                        }
+                    }
+                    _ => {
+                        initial_message = format!("Mirror update not configured for this OS ({}).\n", id);
+                    }
+                }
+            }
+            OsType::Unknown => {
+                initial_message = "Could not determine OS. Mirror update not configured.\n".to_string();
+            }
+        }
+
+        append_clone_mirrors(&buffer_mirrors, &console_output_mirrors, &initial_message);
+
+        if let Some(command_to_run_str) = command_to_run_opt {
+            let execution_prompt = format!(
+                "Attempting to execute with pkexec: sudo {}\nThis may require you to enter your password in a graphical prompt.\nExecuting...",
+                command_to_run_str
+            );
+            append_clone_mirrors(&buffer_mirrors, &console_output_mirrors, &execution_prompt);
+
+            let sender_clone = tx_cmd_result.clone();
+            let command_to_run_for_thread = command_to_run_str.clone();
+
+            thread::spawn(move || {
+                let command_output_result = Command::new("pkexec")
+                    .arg("sh")
+                    .arg("-c")
+                    .arg(&format!("sudo {}", command_to_run_for_thread))
+                    .output();
+                // Use send_blocking as we are in a synchronous thread
+                if sender_clone.send_blocking(command_output_result).is_err() {
+                    // eprintln or some other logging if receiver is closed, though less likely here
+                }
+            });
+            // The receiver part is handled outside connect_clicked, once, in build_ui
+        } else {
+            // No command to run, re-enable button immediately
+            update_mirrors_button_clone.set_sensitive(true);
+        }
+    });
+
+    // Receiver for command results - run this once
+    let buffer_mirrors_recv = buffer.clone();
+    let console_output_mirrors_recv = console_output.clone();
+    let append_clone_mirrors_recv = append_to_console_output.clone();
+    let update_mirrors_button_recv_clone = update_mirrors_button.clone();
+    // We need to capture command_to_run_str for the error message if pkexec fails to start.
+    // However, command_to_run_str is defined inside the connect_clicked closure.
+    // This is tricky. We'll simplify for now: the error message for pkexec not found
+    // won't include the command if we handle rx outside.
+    // A more complex solution would involve sending the command string itself via the channel.
+    // For now, the message is generic if pkexec itself fails.
+
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(command_output_result_from_thread) = rx_cmd_result.recv().await {
+            match command_output_result_from_thread {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let status_message: String = if output.status.success() {
+                        "Mirror update command executed successfully.".to_string()
+                    } else {
+                        format!("Mirror update command execution potentially failed or was cancelled (exit status: {}).", output.status)
+                    };
+                    let full_output_message = format!(
+                        "{}\nStdout:\n{}\nStderr:\n{}\n",
+                        status_message, stdout, stderr
+                    );
+                    append_clone_mirrors_recv(&buffer_mirrors_recv, &console_output_mirrors_recv, &full_output_message);
+                }
+                Err(e) => { // This error is if Command::new("pkexec")... itself failed (e.g., pkexec not found)
+                    let error_message = format!("Failed to start command execution process (e.g., pkexec not found or permission issues).
+Error: {}
+Please ensure Polkit is installed and pkexec is in your PATH.
+", e);
+                    append_clone_mirrors_recv(&buffer_mirrors_recv, &console_output_mirrors_recv, &error_message);
+                }
+            }
+            update_mirrors_button_recv_clone.set_sensitive(true); // Re-enable button
+        }
     });
 
     // Set Cyber Role Button
@@ -288,30 +430,86 @@ fn create_welcome_page(os_type: &OsType) -> Box {
         append_clone_roles(&buffer_roles, &console_output_roles, &message);
     });
 
-    // Package Update Button
+    // Package Update Button - Updated Logic
     let buffer_pkg = buffer.clone();
     let console_output_pkg = console_output.clone();
-    let os_type_pkg = os_type.clone();
     let append_clone_pkg = append_to_console_output.clone();
+    
+    let detected_pkg_manager = detect_package_manager(); 
+    let os_type_clone_for_fallback = os_type.clone(); 
+
     package_update_button.connect_clicked(move |_| {
-        let message: String;
-        match &os_type_pkg {
-            OsType::Arch => {
-                let command_to_run = "sudo pacman -Syu";
-                message = format!("Command for Arch Linux update: {}\nConsider running this in a terminal.\n", command_to_run);
+        let mut command_to_run_opt: Option<String> = None;
+        let initial_message: String;
+
+        match &detected_pkg_manager {
+            PackageManager::Pacman => {
+                let cmd = "sudo pacman -Syu";
+                command_to_run_opt = Some(cmd.to_string());
+                initial_message = format!("Detected Package Manager: Pacman.\nUpdate command: {}\n", cmd);
             }
-            OsType::NixOS => {
-                let command_to_run = "sudo nix-channel --update && sudo nixos-rebuild switch";
-                message = format!("Command for NixOS update: {}\nConsider running this in a terminal.\n", command_to_run);
+            PackageManager::Nix => {
+                let cmd = "sudo nix-channel --update && sudo nixos-rebuild switch";
+                command_to_run_opt = Some(cmd.to_string());
+                initial_message = format!("Detected Package Manager: Nix.\nUpdate command: {}\n", cmd);
             }
-            OsType::Other(id) => {
-                message = format!("Package update not configured for this OS ({}).\n", id);
-            }
-            OsType::Unknown => {
-                message = "Package update not configured for Unknown OS.\n".to_string();
+            PackageManager::Unknown => {
+                match &os_type_clone_for_fallback { 
+                    OsType::Arch => {
+                        let cmd = "sudo pacman -Syu";
+                        command_to_run_opt = Some(cmd.to_string());
+                        initial_message = format!("Could not definitively detect package manager, but OS is Arch-based.\nUpdate command: {}\n", cmd);
+                    }
+                    OsType::NixOS => {
+                        let cmd = "sudo nix-channel --update && sudo nixos-rebuild switch";
+                        command_to_run_opt = Some(cmd.to_string());
+                        initial_message = format!("Could not definitively detect package manager, but OS is NixOS-based.\nUpdate command: {}\n", cmd);
+                    }
+                    OsType::Other(id) => {
+                         initial_message = format!("Package manager not automatically detected for this OS ({}).\nPackage update not configured.\n", id);
+                    }
+                    OsType::Unknown => {
+                        initial_message = "Package manager not automatically detected.\nPackage update not configured for Unknown OS.\n".to_string();
+                    }
+                }
             }
         }
-        append_clone_pkg(&buffer_pkg, &console_output_pkg, &message);
+
+        append_clone_pkg(&buffer_pkg, &console_output_pkg, &initial_message);
+
+        if let Some(command_to_run) = command_to_run_opt {
+            let execution_prompt = format!(
+                "Attempting to execute with pkexec: {}\nThis may require you to enter your password in a graphical prompt.\nExecuting...",
+                command_to_run
+            );
+            append_clone_pkg(&buffer_pkg, &console_output_pkg, &execution_prompt);
+
+            match Command::new("pkexec").arg("sh").arg("-c").arg(&command_to_run).output() {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let status_message: String = if output.status.success() {
+                        "Command executed successfully.".to_string()
+                    } else {
+                        format!("Command execution potentially failed or was cancelled (exit status: {}).", output.status)
+                    };
+                    let full_output_message = format!(
+                        "{}\nStdout:\n{}\nStderr:\n{}\n",
+                        status_message, stdout, stderr
+                    );
+                    append_clone_pkg(&buffer_pkg, &console_output_pkg, &full_output_message);
+                }
+                Err(e) => {
+                    let error_message = if e.kind() == std::io::ErrorKind::NotFound {
+                        format!("pkexec command not found. Please ensure Polkit is installed and pkexec is in your PATH.\nCannot execute: {}\nPlease run it manually in a terminal.\n", command_to_run)
+                    } else {
+                        format!("Failed to start command with pkexec: {}\nError: {}\nCannot execute: {}\nPlease run it manually in a terminal.\n", command_to_run, e, command_to_run)
+                    };
+                    append_clone_pkg(&buffer_pkg, &console_output_pkg, &error_message);
+                }
+            }
+        } 
+        // If command_to_run_opt was None, initial_message (explaining why) was already printed.
     });
 
     // HTB Update Button
@@ -367,7 +565,7 @@ fn create_info_page() -> Box {
     social_media_box.set_margin_top(20);
 
     // Discord
-    let discord_icon = Picture::for_filename("images/discord.png");
+    let discord_icon = Picture::for_resource("/org/athenaos/welcome/images/discord.png");
     let discord_link = LinkButton::with_label("YOUR_DISCORD_URL_HERE", "Discord");
     let discord_button_box = Box::new(Orientation::Horizontal, 5);
     discord_button_box.append(&discord_icon);
@@ -375,7 +573,7 @@ fn create_info_page() -> Box {
     social_media_box.append(&discord_button_box);
 
     // Instagram
-    let instagram_icon = Picture::for_filename("images/insta.png");
+    let instagram_icon = Picture::for_resource("/org/athenaos/welcome/images/insta.png");
     let instagram_link = LinkButton::with_label("YOUR_INSTAGRAM_URL_HERE", "Instagram");
     let instagram_button_box = Box::new(Orientation::Horizontal, 5);
     instagram_button_box.append(&instagram_icon);

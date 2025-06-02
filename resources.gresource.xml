@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/athenaos/welcome">
+    <file alias="images/athena-arch-one-liner.png">images/athena-arch-one-liner.png</file>
+    <file alias="images/athena-nix-one-liner.png">images/athena-nix-one-liner.png</file>
+    <file alias="images/discord.png">images/discord.png</file>
+    <file alias="images/insta.png">images/insta.png</file>
+  </gresource>
+</gresources> 

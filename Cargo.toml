@@ -5,3 +5,8 @@ edition = "2021"
 
 [dependencies]
 gtk = { version = "0.9.6", package = "gtk4", features = ["v4_12"] }
+gio = { version = "0.20.0", features = ["v2_72"] }
+async-channel = "2.2"
+
+[build-dependencies]
+glib-build-tools = "0.20.0"
