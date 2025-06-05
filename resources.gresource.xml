@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/athenaos/welcome">
+    <file alias="images/athena-arch-one-liner.png">images/athena-arch-one-liner.png</file>
+    <file alias="images/athena-nix-one-liner.png">images/athena-nix-one-liner.png</file>
+    <file alias="images/discord.png">images/discord.png</file>
+    <file alias="images/insta.png">images/insta.png</file>
+    <file alias="images/htb.png">images/htb.png</file>
+    <file alias="images/mewe.png">images/mewe.png</file>
+    <file alias="images/patreon.png">images/patreon.png</file>
+    <file alias="images/question.png">images/question.png</file>
+    <file alias="images/question.svg">images/question.svg</file>
+    <file alias="images/tg.png">images/tg.png</file>
+    <file alias="images/twitter.png">images/twitter.png</file>
+    <file alias="images/youtube.png">images/youtube.png</file>
+    <file alias="images/athenaos.svg">images/athenaos.svg</file>
+    <file alias="images/element.png">images/element.png</file>
+    <file alias="images/facebook.png">images/facebook.png</file>
+    <file alias="images/hefftor.svg">images/hefftor.svg</file>
+    <file alias="images/linkedin.png">images/linkedin.png</file>
+    <file alias="images/archlinux-tweak-tool-new.svg">images/archlinux-tweak-tool-new.svg</file>
+    <file alias="images/archlinux-tweak-tool.svg">images/archlinux-tweak-tool.svg</file>
+  </gresource>
+</gresources> 
