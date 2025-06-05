@@ -2,6 +2,12 @@
 
 A modern welcome application for Athena OS, written in Rust using GTK4.
 
+This version is designed to work with custom cyber-toolkit implementation which allows multiple roles to be set, added or removed.
+Role-handling implementation pending.
+HTB Update implementation pending.
+UI needs some serious work before merging with the origin.
+
+
 ## Features
 
 - Modern GTK4-based user interface
